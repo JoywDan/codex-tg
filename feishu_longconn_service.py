@@ -67,6 +67,37 @@ def parse_allowed_open_ids(raw: Optional[str]) -> Optional[Set[str]]:
     return result or None
 
 
+def parse_non_negative_int(raw: Optional[str], default: int) -> int:
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError, AttributeError):
+        return default
+    return value if value >= 0 else default
+
+
+def parse_epoch_ms(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        try:
+            value = int(float(text))
+        except ValueError:
+            return None
+    if value <= 0:
+        return None
+    # Some SDK payloads may carry seconds instead of milliseconds.
+    if value < 10_000_000_000:
+        value *= 1000
+    return value
+
+
 def parse_text_content(raw: Optional[str]) -> str:
     if not raw:
         return ""
@@ -360,6 +391,7 @@ class FeishuCodexService:
         app_secret: str,
         allowed_open_ids: Optional[Set[str]],
         enable_p2p: bool,
+        ignore_old_message_seconds: int,
     ):
         self.api = api
         self.sessions = sessions
@@ -368,6 +400,8 @@ class FeishuCodexService:
         self.default_cwd = default_cwd
         self.allowed_open_ids = allowed_open_ids
         self.enable_p2p = enable_p2p
+        self.ignore_old_message_seconds = max(0, ignore_old_message_seconds)
+        self.startup_time_ms = int(time.time() * 1000)
         self.seen_event_ids: Set[str] = set()
         self.seen_message_ids: Set[str] = set()
         self.event_handler = (
@@ -387,7 +421,10 @@ class FeishuCodexService:
         )
 
     def run_forever(self) -> None:
-        log("feishu long connection service started")
+        log(
+            "feishu long connection service started "
+            f"(ignore_old_message_seconds={self.ignore_old_message_seconds})"
+        )
         self.ws_client.start()
 
     def _on_ignored_event(self, data: Any) -> None:
@@ -421,6 +458,7 @@ class FeishuCodexService:
             log(f"unsupported message type ignored: message_type={msg_type or 'unknown'}")
             return
         message_id = (msg.message_id or "").strip()
+        message_create_time = parse_epoch_ms(getattr(msg, "create_time", None))
         if message_id:
             if message_id in self.seen_message_ids:
                 log(f"duplicate message dropped: message_id={message_id}")
@@ -447,6 +485,16 @@ class FeishuCodexService:
         if not chat_id:
             return
 
+        if self.ignore_old_message_seconds > 0 and message_create_time is not None:
+            threshold_ms = self.startup_time_ms - self.ignore_old_message_seconds * 1000
+            if message_create_time < threshold_ms:
+                log(
+                    "stale message ignored: "
+                    f"actor={actor_id} chat_id={chat_id} chat_type={chat_type} "
+                    f"message_id={message_id or '-'} create_time={message_create_time}"
+                )
+                return
+
         if self.allowed_open_ids is not None and sender_open_id not in self.allowed_open_ids:
             self.api.send_message(chat_id, "没有权限使用这个 bot。")
             return
@@ -462,7 +510,9 @@ class FeishuCodexService:
 
         log(
             "message received: "
-            f"actor={actor_id} chat_id={chat_id} chat_type={chat_type} text={text[:80]!r}"
+            f"actor={actor_id} chat_id={chat_id} chat_type={chat_type} "
+            f"message_id={message_id or '-'} create_time={message_create_time or '-'} "
+            f"text={text[:80]!r}"
         )
         self._handle_text(chat_id, actor_id, text)
 
@@ -735,6 +785,10 @@ def build_service() -> FeishuCodexService:
     enable_p2p = env("FEISHU_ENABLE_P2P", "0") == "1"
     log_level = env("FEISHU_LOG_LEVEL", "INFO") or "INFO"
     rich_message_enabled = env("FEISHU_RICH_MESSAGE", "1") == "1"
+    ignore_old_message_seconds = parse_non_negative_int(
+        env("FEISHU_IGNORE_OLD_MESSAGE_SECONDS", "180"),
+        180,
+    )
 
     api = FeishuAPI(
         app_id=app_id,
@@ -765,6 +819,7 @@ def build_service() -> FeishuCodexService:
         app_secret=app_secret,
         allowed_open_ids=allowed_open_ids,
         enable_p2p=enable_p2p,
+        ignore_old_message_seconds=ignore_old_message_seconds,
     )
 
 
