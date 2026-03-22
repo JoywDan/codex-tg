@@ -2,7 +2,7 @@
 
 Language: English | [简体中文](README.zh-CN.md)
 
-`tg-codex` lets you run and continue local `codex` sessions from chat apps. It supports Telegram and Feishu (long connection).
+`tg-codex` lets you run and continue local `codex` sessions from chat apps. It supports Telegram, Feishu (long connection), and WeChat.
 
 ## Features
 
@@ -12,7 +12,7 @@ Language: English | [简体中文](README.zh-CN.md)
 - Create new sessions and control working directory
 - View recent messages in a session (`/history`)
 - Optionally transcribe Telegram voice/audio messages into text before continuing the session
-- Run Telegram only, Feishu only, or both at the same time
+- Run Telegram only, Feishu only, WeChat only, or any combination at the same time
 
 ## Requirements
 
@@ -21,6 +21,7 @@ Language: English | [简体中文](README.zh-CN.md)
 - Channel credentials (as needed)
   - Telegram: `TELEGRAM_BOT_TOKEN`
   - Feishu: `FEISHU_APP_ID` + `FEISHU_APP_SECRET`
+  - WeChat: run `./run_wechat.sh login` once to create a local bot token
 
 ## Quick Start
 
@@ -29,7 +30,9 @@ Language: English | [简体中文](README.zh-CN.md)
 ```bash
 # Telegram (optional)
 export TELEGRAM_BOT_TOKEN="your bot token"
-export ALLOWED_TELEGRAM_USER_IDS="123456789"         # optional, recommended
+export ALLOWED_TELEGRAM_USER_IDS="123456789"         # recommended; required by default for safety
+export TG_REQUIRE_ALLOWLIST=1                         # optional, default 1; set 0 to allow any Telegram user
+export TELEGRAM_INSECURE_SKIP_VERIFY=0                # optional, default 0; set 1 only for temporary debugging
 export TG_STREAM_ENABLED=1                            # optional, default 1 (streaming reply edits)
 export TG_STREAM_EDIT_INTERVAL_MS=300                # optional, stream edit throttle interval in ms
 export TG_STREAM_MIN_DELTA_CHARS=8                    # optional, skip refresh if change is too small
@@ -54,6 +57,15 @@ export TG_VOICE_TRANSCRIBE_TIMEOUT_SEC=180            # optional
 export FEISHU_APP_ID="cli_xxx"
 export FEISHU_APP_SECRET="xxx"
 
+# WeChat (optional)
+export WECHAT_ENABLED=0                            # optional; logged-in WeChat is enabled by default, set 0 to disable
+export ALLOWED_WECHAT_USER_IDS="xxx@im.wechat"    # optional; defaults to the scanner's own user_id after login
+export WECHAT_REQUIRE_ALLOWLIST=1                  # optional, default 1; set 0 to allow any WeChat user
+export WECHAT_API_BASE_URL="https://ilinkai.weixin.qq.com"
+export WECHAT_LOGIN_BOT_TYPE=3
+export WECHAT_POLL_TIMEOUT_SEC=35
+export WECHAT_SEND_TYPING=1
+
 # Shared (optional)
 export DEFAULT_CWD="/path/to/your/project/codex-tg"
 export CODEX_BIN="/Applications/Codex.app/Contents/Resources/codex"
@@ -74,7 +86,15 @@ export CODEX_IDLE_TIMEOUT_SEC=3600                  # optional: kill codex exec 
 
 - `TELEGRAM_BOT_TOKEN` configured: starts Telegram
 - `FEISHU_APP_ID` + `FEISHU_APP_SECRET` configured: starts Feishu
-- both configured: starts both channels
+- a saved WeChat login token: starts WeChat by default
+- `WECHAT_ENABLED=0`: disables WeChat explicitly
+- any combination configured: starts all available channels
+
+Security notes:
+
+- `run.sh` now refuses to start Telegram unless `ALLOWED_TELEGRAM_USER_IDS` is set, unless you explicitly set `TG_REQUIRE_ALLOWLIST=0`
+- `TELEGRAM_INSECURE_SKIP_VERIFY` defaults to `0`; keep it there unless you are debugging a local TLS issue
+- if WeChat login has not been completed yet, `run.sh` prints a clear hint to run `./run_wechat.sh login`
 
 Common commands:
 
@@ -84,6 +104,34 @@ Common commands:
 ./run.sh logs
 ./run.sh restart
 ```
+
+## WeChat Login
+
+The WeChat channel uses Tencent's new QR-login flow and stores the resulting token under `.runtime/wechat/`.
+
+First-time setup:
+
+```bash
+./run_wechat.sh login
+./run_wechat.sh start
+```
+
+WeChat-only management:
+
+```bash
+./run_wechat.sh login
+./run_wechat.sh stop
+./run_wechat.sh status
+./run_wechat.sh logs
+./run_wechat.sh restart
+```
+
+Notes:
+
+- One logged-in WeChat account is supported per service instance in this version
+- With allowlist protection enabled, the scanner's own `user_id` is auto-allowed by default after login
+- v1 is text-only: no images, files, voice, groups, or edit-style streaming replies yet
+- WeChat uses the same session commands as Telegram and Feishu
 
 ## Feishu Setup
 
@@ -129,7 +177,7 @@ Risk notes:
 - It may read and exfiltrate sensitive data (keys, configs, source code)
 - Enable only in controlled environments and switch back to `0` afterward
 
-## Commands (Telegram / Feishu)
+## Commands (Telegram / Feishu / WeChat)
 
 - `/help`
 - `/sessions [N]`: list recent `N` sessions (title + index)
@@ -164,9 +212,13 @@ Tips:
 - `tg_codex_bot.py`: Telegram service entry
 - `feishu_longconn_service.py`: Feishu long-connection service entry
 - `run_feishu.sh`: Feishu-only process management script
+- `wechat_codex_service.py`: WeChat service entry
+- `run_wechat.sh`: WeChat-only process management script
+- `codex_common.py`: shared local Codex/session/state helpers
 
 ## Known Limitations
 
 - New sessions are mainly visible in terminal/CLI session history
 - Codex Desktop may need restart before newly continued sessions become visible
 - Only one in-flight task is allowed per session; switch to another thread for parallel work
+- WeChat currently supports direct-message text only

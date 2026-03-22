@@ -15,6 +15,11 @@ TG_STATE_PATH="$RUNTIME_DIR/bot_state.json"
 FEISHU_RUN_SCRIPT="$SCRIPT_DIR/run_feishu.sh"
 FEISHU_LOG_FILE="$RUNTIME_DIR/feishu_bot.log"
 
+# WeChat runtime
+WECHAT_RUN_SCRIPT="$SCRIPT_DIR/run_wechat.sh"
+WECHAT_LOG_FILE="$RUNTIME_DIR/wechat/wechat_bot.log"
+WECHAT_ACCOUNT_FILE="$RUNTIME_DIR/wechat/account.json"
+
 # Shared env
 DEFAULT_CWD="${DEFAULT_CWD:-$SCRIPT_DIR}"
 CODEX_BIN="${CODEX_BIN:-/Applications/Codex.app/Contents/Resources/codex}"
@@ -26,7 +31,8 @@ CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS:-0}"
 # Telegram env
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 ALLOWED_TELEGRAM_USER_IDS="${ALLOWED_TELEGRAM_USER_IDS:-}"
-TELEGRAM_INSECURE_SKIP_VERIFY="${TELEGRAM_INSECURE_SKIP_VERIFY:-1}"
+TG_REQUIRE_ALLOWLIST="${TG_REQUIRE_ALLOWLIST:-1}"
+TELEGRAM_INSECURE_SKIP_VERIFY="${TELEGRAM_INSECURE_SKIP_VERIFY:-0}"
 TELEGRAM_CA_BUNDLE="${TELEGRAM_CA_BUNDLE:-}"
 TG_STREAM_ENABLED="${TG_STREAM_ENABLED:-1}"
 TG_STREAM_EDIT_INTERVAL_MS="${TG_STREAM_EDIT_INTERVAL_MS:-300}"
@@ -48,12 +54,37 @@ OPENAI_BASE_URL="${OPENAI_BASE_URL:-}"
 FEISHU_APP_ID="${FEISHU_APP_ID:-}"
 FEISHU_APP_SECRET="${FEISHU_APP_SECRET:-}"
 
+# WeChat env
+WECHAT_ENABLED="${WECHAT_ENABLED:-}"
+WECHAT_API_BASE_URL="${WECHAT_API_BASE_URL:-https://ilinkai.weixin.qq.com}"
+WECHAT_LOGIN_BOT_TYPE="${WECHAT_LOGIN_BOT_TYPE:-3}"
+ALLOWED_WECHAT_USER_IDS="${ALLOWED_WECHAT_USER_IDS:-}"
+WECHAT_REQUIRE_ALLOWLIST="${WECHAT_REQUIRE_ALLOWLIST:-1}"
+WECHAT_POLL_TIMEOUT_SEC="${WECHAT_POLL_TIMEOUT_SEC:-35}"
+WECHAT_SEND_TYPING="${WECHAT_SEND_TYPING:-1}"
+
 has_tg_config() {
   [[ -n "$TELEGRAM_BOT_TOKEN" ]]
 }
 
 has_feishu_config() {
   [[ -n "$FEISHU_APP_ID" || -n "$FEISHU_APP_SECRET" ]]
+}
+
+has_wechat_enabled() {
+  local raw="${WECHAT_ENABLED:-}"
+  if [[ -z "$raw" ]]; then
+    wechat_has_login
+    return $?
+  fi
+  case "${raw,,}" in
+    0|false|no|off|disable|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+wechat_has_login() {
+  [[ -f "$WECHAT_ACCOUNT_FILE" ]] && grep -q '"token"' "$WECHAT_ACCOUNT_FILE" 2>/dev/null
 }
 
 validate_tg_config() {
@@ -67,6 +98,15 @@ validate_tg_config() {
   if [[ -n "$ALLOWED_TELEGRAM_USER_IDS" ]] && [[ ! "$ALLOWED_TELEGRAM_USER_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
     echo "[error] ALLOWED_TELEGRAM_USER_IDS 格式错误，应为数字 ID，多个用逗号分隔"
     exit 1
+  fi
+  if [[ "$TG_REQUIRE_ALLOWLIST" != "0" && -z "$ALLOWED_TELEGRAM_USER_IDS" ]]; then
+    echo "[error] 出于安全考虑，Telegram 默认要求配置 ALLOWED_TELEGRAM_USER_IDS"
+    echo "[hint] 先设置你自己的 Telegram 数字 ID，例如: export ALLOWED_TELEGRAM_USER_IDS=\"123456789\""
+    echo "[hint] 如确实要关闭该保护，可显式设置: export TG_REQUIRE_ALLOWLIST=0"
+    exit 1
+  fi
+  if [[ "$TELEGRAM_INSECURE_SKIP_VERIFY" == "1" ]]; then
+    echo "[warn] TELEGRAM_INSECURE_SKIP_VERIFY=1 会跳过 Telegram TLS 证书校验，仅建议调试时临时使用"
   fi
 }
 
@@ -84,6 +124,14 @@ validate_shared_config() {
   if [[ ! -x "$CODEX_BIN" ]]; then
     echo "[error] CODEX_BIN 不存在或不可执行: $CODEX_BIN"
     exit 1
+  fi
+  if [[ ! -d "$DEFAULT_CWD" ]]; then
+    echo "[error] DEFAULT_CWD 不存在或不是目录: $DEFAULT_CWD"
+    exit 1
+  fi
+  if [[ "$DEFAULT_CWD" == "$HOME" || "$DEFAULT_CWD" == "/" ]]; then
+    echo "[warn] DEFAULT_CWD 当前为高风险目录: $DEFAULT_CWD"
+    echo "[warn] 建议改成单独的项目目录，避免 bot 默认暴露过多本地文件"
   fi
 }
 
@@ -175,6 +223,7 @@ tg_start() {
   nohup env \
     TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
     ALLOWED_TELEGRAM_USER_IDS="$ALLOWED_TELEGRAM_USER_IDS" \
+    TG_REQUIRE_ALLOWLIST="$TG_REQUIRE_ALLOWLIST" \
     DEFAULT_CWD="$DEFAULT_CWD" \
     CODEX_BIN="$CODEX_BIN" \
     CODEX_SESSION_ROOT="$CODEX_SESSION_ROOT" \
@@ -261,6 +310,31 @@ feishu_status() {
   fi
 }
 
+wechat_start() {
+  if [[ ! -x "$WECHAT_RUN_SCRIPT" ]]; then
+    echo "[error] 找不到微信启动脚本: $WECHAT_RUN_SCRIPT"
+    exit 1
+  fi
+  echo "[info] 启动微信服务..."
+  "$WECHAT_RUN_SCRIPT" start
+}
+
+wechat_stop() {
+  if [[ -x "$WECHAT_RUN_SCRIPT" ]]; then
+    "$WECHAT_RUN_SCRIPT" stop
+  else
+    echo "[info] 微信脚本不存在，跳过停止"
+  fi
+}
+
+wechat_status() {
+  if [[ -x "$WECHAT_RUN_SCRIPT" ]]; then
+    "$WECHAT_RUN_SCRIPT" status
+  else
+    echo "[info] 微信脚本不存在"
+  fi
+}
+
 start() {
   validate_tg_config
   validate_feishu_config
@@ -272,11 +346,17 @@ start() {
     echo "[info] 如需更完整权限体验，可设置：export CODEX_DANGEROUS_BYPASS=1"
   fi
 
-  if ! has_tg_config && ! has_feishu_config; then
+  local can_start_wechat=0
+  if has_wechat_enabled && wechat_has_login; then
+    can_start_wechat=1
+  fi
+
+  if ! has_tg_config && ! has_feishu_config && [[ "$can_start_wechat" != "1" ]]; then
     echo "[error] 未检测到可启动渠道。"
     echo "请至少配置一组："
     echo "  1) TELEGRAM_BOT_TOKEN"
     echo "  2) FEISHU_APP_ID + FEISHU_APP_SECRET"
+    echo "  3) 已执行 ./run_wechat.sh login（默认会启用微信，除非显式关闭）"
     exit 1
   fi
 
@@ -291,22 +371,36 @@ start() {
   else
     echo "[info] 未配置 FEISHU_APP_ID/FEISHU_APP_SECRET，跳过飞书"
   fi
+
+  if has_wechat_enabled; then
+    if wechat_has_login; then
+      wechat_start
+    else
+      echo "[warn] 已启用微信渠道，但尚未完成登录。"
+      echo "[hint] 先执行: ./run_wechat.sh login"
+    fi
+  else
+    echo "[info] 微信已显式关闭，跳过微信"
+  fi
 }
 
 stop() {
   tg_stop
   feishu_stop
+  wechat_stop
 }
 
 status() {
   tg_status
   feishu_status
+  wechat_status
 }
 
 logs() {
   mkdir -p "$RUNTIME_DIR"
-  touch "$TG_LOG_FILE" "$FEISHU_LOG_FILE"
-  tail -f "$TG_LOG_FILE" "$FEISHU_LOG_FILE"
+  mkdir -p "$RUNTIME_DIR/wechat"
+  touch "$TG_LOG_FILE" "$FEISHU_LOG_FILE" "$WECHAT_LOG_FILE"
+  tail -f "$TG_LOG_FILE" "$FEISHU_LOG_FILE" "$WECHAT_LOG_FILE"
 }
 
 restart() {
@@ -322,7 +416,9 @@ usage() {
 行为：
 - 配置 TELEGRAM_BOT_TOKEN -> 启动 Telegram
 - 配置 FEISHU_APP_ID + FEISHU_APP_SECRET -> 启动飞书
-- 两者都配置 -> 两个都启动
+- 已登录 -> 默认启动微信
+- 设置 WECHAT_ENABLED=0 -> 显式关闭微信
+- 可同时启动多个渠道
 
 示例：
 export TELEGRAM_BOT_TOKEN="123456:xxxx"
@@ -334,6 +430,15 @@ export TG_THINKING_STATUS_INTERVAL_MS=700       # 可选，思考状态刷新间
 
 export FEISHU_APP_ID="cli_xxx"
 export FEISHU_APP_SECRET="xxx"
+
+export WECHAT_ENABLED=0           # 可选；已登录时默认启用，设为 0 可关闭
+export ALLOWED_WECHAT_USER_IDS="xxx@im.wechat"
+export WECHAT_REQUIRE_ALLOWLIST=1
+export WECHAT_API_BASE_URL="https://ilinkai.weixin.qq.com"
+export WECHAT_LOGIN_BOT_TYPE=3
+export WECHAT_POLL_TIMEOUT_SEC=35
+export WECHAT_SEND_TYPING=1
+# 首次使用前执行: ./run_wechat.sh login
 
 # Codex command execution policy
 # 0: no extra permission args (default)

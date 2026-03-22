@@ -16,46 +16,21 @@ except ImportError as err:  # pragma: no cover
         "Install with: python3 -m pip install --user lark-oapi"
     ) from err
 
-from tg_codex_bot import (
+from codex_common import (
     BotState,
     CodexRunner,
     RunningPromptRegistry,
     SessionStore,
+    chunk_text,
+    env,
+    log,
     parse_dangerous_bypass_level,
+    parse_non_negative_int,
     resolve_codex_bin,
 )
 
 
 MAX_FEISHU_TEXT = 2000
-
-
-def log(msg: str) -> None:
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
-
-
-def env(name: str, default: Optional[str] = None) -> Optional[str]:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    value = value.strip()
-    return value if value else default
-
-
-def chunk_text(text: str, size: int = 1800) -> List[str]:
-    if len(text) <= size:
-        return [text]
-    chunks: List[str] = []
-    start = 0
-    while start < len(text):
-        end = min(start + size, len(text))
-        if end < len(text):
-            split_at = text.rfind("\n", start, end)
-            if split_at > start:
-                end = split_at + 1
-        chunks.append(text[start:end])
-        start = end
-    return chunks
 
 
 def parse_allowed_open_ids(raw: Optional[str]) -> Optional[Set[str]]:
@@ -67,16 +42,6 @@ def parse_allowed_open_ids(raw: Optional[str]) -> Optional[Set[str]]:
         if value:
             result.add(value)
     return result or None
-
-
-def parse_non_negative_int(raw: Optional[str], default: int) -> int:
-    if raw is None:
-        return default
-    try:
-        value = int(raw.strip())
-    except (TypeError, ValueError, AttributeError):
-        return default
-    return value if value >= 0 else default
 
 
 def parse_epoch_ms(raw: Any) -> Optional[int]:
