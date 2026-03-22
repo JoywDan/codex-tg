@@ -51,13 +51,22 @@ has_login() {
   [[ -f "$ACCOUNT_FILE" ]] && grep -q '"token"' "$ACCOUNT_FILE" 2>/dev/null
 }
 
+print_permission_notice() {
+  if [[ "${CODEX_DANGEROUS_BYPASS}" == "0" ]]; then
+    echo "[info] 当前 CODEX_DANGEROUS_BYPASS=0（微信不追加权限参数）"
+    echo "[info] 如需更完整权限体验，可设置：export CODEX_DANGEROUS_BYPASS=1"
+  fi
+}
+
 is_enabled() {
   local raw="${WECHAT_ENABLED:-}"
+  local lowered=""
   if [[ -z "$raw" ]]; then
     has_login
     return $?
   fi
-  case "${raw,,}" in
+  lowered="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
     0|false|no|off|disable|disabled) return 1 ;;
     *) return 0 ;;
   esac
@@ -93,6 +102,7 @@ login() {
 start() {
   fail_if_not_configured
   mkdir -p "$WECHAT_RUNTIME_DIR"
+  print_permission_notice
 
   if ! is_enabled; then
     echo "[info] 微信已被显式关闭，跳过启动"

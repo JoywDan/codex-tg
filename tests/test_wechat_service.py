@@ -277,6 +277,10 @@ class WechatServiceTests(unittest.TestCase):
                 if any("answer:hello" in text for _, _, text in api.sent):
                     break
                 time.sleep(0.05)
+            self.assertFalse(
+                any("已开始处理" in text for _, _, text in api.sent),
+                "wechat prompt should not emit the removed ack text",
+            )
             self.assertTrue(any("answer:hello" in text for _, _, text in api.sent))
 
 

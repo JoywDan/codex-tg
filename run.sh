@@ -73,11 +73,13 @@ has_feishu_config() {
 
 has_wechat_enabled() {
   local raw="${WECHAT_ENABLED:-}"
+  local lowered=""
   if [[ -z "$raw" ]]; then
     wechat_has_login
     return $?
   fi
-  case "${raw,,}" in
+  lowered="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
     0|false|no|off|disable|disabled) return 1 ;;
     *) return 0 ;;
   esac

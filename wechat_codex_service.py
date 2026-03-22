@@ -754,11 +754,6 @@ class WechatCodexService:
         session_label = self._session_label(active_id, cwd)
         mode = "继续当前会话" if active_id else "新建会话"
         log(f"queue wechat prompt: actor={actor_id} mode={mode} cwd={cwd} session={active_id}")
-        self._send_text(
-            actor_id,
-            context_token,
-            "已开始处理。\n可继续发送 /use、/sessions、/status。",
-        )
         worker = threading.Thread(
             target=self._run_prompt_worker,
             args=(actor_id, context_token, prompt, active_id, cwd, session_label),
